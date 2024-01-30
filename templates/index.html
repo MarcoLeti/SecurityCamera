@@ -3,70 +3,29 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <link rel="stylesheet" href="{{ url_for('static', filename='styles.css') }}">
+    <script src="{{ url_for('static', filename='scripts.js') }}"></script>
     <title>Video Streaming App</title>
-    <style>
-        #video-container {
-            width: 640px;
-            height: 480px;
-            position: relative;
-            overflow: hidden;
-        }
-
-        #video-stream {
-            width: 100%;
-            height: 100%;
-            position: absolute;
-            top: 0;
-            left: 0;
-        }
-    </style>
 </head>
 <body>
-    <h1>Video Streaming App</h1>
+    <header>
+        <h1>Video Streaming App</h1>
+    </header>
+    
     <div id="video-container">
-        <img id="video-stream" src="" alt="Video Stream">
+        <img id="video-stream" src="/get_placeholder_frames" alt="Video Stream">
     </div>
+
     <form action="/get_video_frames" method="get" onsubmit="startVideo(); return false;">
         <button type="submit">Start Video</button>
     </form>
+
     <form action="/get_placeholder_frames" method="get" onsubmit="startVideo2(); return false;">
         <button type="submit">Stop Video</button>
     </form>
 
     <script>
         var prev_show_video = false;
-        function startVideo() {
-            var timestamp = new Date().getTime();
-            document.getElementById('video-stream').src = "/get_video_frames" + "?timestamp=" + timestamp;
-        }
-        function startVideo2() {
-            var timestamp = new Date().getTime();
-            document.getElementById('video-stream').src = "/get_placeholder_frames" + "?timestamp=" + timestamp;
-        }
-
-        function updateShowVideo(prev) {
-            var xhr = new XMLHttpRequest();
-            xhr.open("GET", "/get_show_video", true);
-            xhr.onreadystatechange = function() {
-                if (xhr.readyState == 4 && xhr.status == 200) {
-                    var showVideoValue = JSON.parse(xhr.responseText).show_video;
-                    if (showVideoValue && showVideoValue !== prev_show_video) {
-                        startVideo();
-                        console.log(showVideoValue);
-                        console.log(prev_show_video);
-                        prev_show_video = showVideoValue;
-                    } else if (!showVideoValue && showVideoValue !== prev_show_video){
-                        startVideo2();
-                        console.log(showVideoValue);
-                        console.log(prev_show_video);
-                        prev_show_video = showVideoValue;
-                    }
-                }
-            };
-            xhr.send();
-        }
-
-        // Periodically update show_video value
         setInterval(() => updateShowVideo(prev_show_video), 1000);
     </script>
 </body>
