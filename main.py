@@ -1,5 +1,5 @@
 import sys
-from flask import Flask, render_template, Response, jsonify, request
+from flask import Flask, render_template, Response, jsonify
 import time
 import cv2
 import numpy as np
@@ -10,6 +10,7 @@ from tflite_support.task import vision
 import paho.mqtt.client as mqtt
 import logging
 import threading
+import RPi.GPIO as GPIO
 
 _MARGIN = 10  # pixels
 _ROW_SIZE = 10  # pixels
@@ -23,7 +24,19 @@ prev_show_video = False
 show_video_lock = threading.Lock()
 cap = None
 topic = "detection"
-logging.basicConfig(level=logging.DEBUG)
+logging.basicConfig(level=logging.DEBUG, format='%(asctime)s - %(levelname)s - %(message)s')
+
+MATRIX = [
+    [1, 2, 3, "A"],
+    [4, 5, 6, "B"],
+    [7, 8, 9, "C"],
+    ["*", 0, "#", "D"]
+]
+
+ROW_PINS = [17, 18, 27, 22]
+COL_PINS = [23, 25, 24, 8]
+
+GPIO.setmode(GPIO.BCM)
 
 def visualize(
     image: np.ndarray,
@@ -169,6 +182,61 @@ def generate_placeholder():
     yield (b'--frame\r\n'
             b'Content-Type: image/jpeg\r\n\r\n' + placeholder_frame + b'\r\n\r\n')
 
+def setup_matrix():
+    for j in range(4):
+        GPIO.setup(COL_PINS[j], GPIO.OUT)
+        GPIO.output(COL_PINS[j], 1)
+
+    for i in range(4):
+        GPIO.setup(ROW_PINS[i], GPIO.IN, pull_up_down=GPIO.PUD_UP)
+
+def get_key():
+    key = None
+    for j in range(4):
+        GPIO.output(COL_PINS[j], 0)
+        for i in range(4):
+            if GPIO.input(ROW_PINS[i]) == 0:
+                key = MATRIX[i][j]
+                while GPIO.input(ROW_PINS[i]) == 0:
+                    pass  # wait for key release
+        GPIO.output(COL_PINS[j], 1)
+    return key
+
+# Function to check for a longer password sequence
+def check_password_sequence():
+    global stop_video
+
+    password_sequence = "23AB#"
+    entered_sequence = ""
+    timeoutOn = False
+    start_time = time.time()
+    while True:
+        key = get_key()
+        if key:
+            if not timeoutOn:
+                start_time = time.time()
+                timeoutOn = True
+            logging.info(f"Key: {key}")
+            entered_sequence += str(key)
+            logging.info(f"Entered_sequence: {entered_sequence}")
+            # Check if the entered sequence matches the password
+            if entered_sequence == password_sequence:
+                stop_video = not stop_video
+                logging.info(f"sequence is correct")
+                entered_sequence = ""
+                timeoutOn = False
+
+            # Reset the entered sequence if it doesn't match the password
+            if not password_sequence.startswith(entered_sequence) or (timeoutOn and time.time() > start_time + 10):
+                entered_sequence = ""
+                logging.info(f"sequence is wrong")
+                timeoutOn = False
+
+        if timeoutOn and time.time() > start_time + 10:
+            entered_sequence = ""
+            logging.info(f"time out")
+            timeoutOn = False
+
 @app.route('/')
 def index():
     return render_template('index.html')
@@ -191,4 +259,7 @@ def get_show_video():
     return jsonify(show_video=show_video)
 
 if __name__ == '__main__':
-    app.run(debug=True)
+    setup_matrix()
+    keypad_thread = threading.Thread(target=check_password_sequence)
+    keypad_thread.start()
+    #app.run(debug=True)
