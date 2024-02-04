@@ -11,6 +11,8 @@ import paho.mqtt.client as mqtt
 import logging
 import threading
 import RPi.GPIO as GPIO
+from datetime import datetime
+import atexit
 
 _MARGIN = 10  # pixels
 _ROW_SIZE = 10  # pixels
@@ -24,6 +26,7 @@ prev_show_video = False
 show_video_lock = threading.Lock()
 cap = None
 topic = "detection"
+output_video_writer = None
 logging.basicConfig(level=logging.DEBUG, format='%(asctime)s - %(levelname)s - %(message)s')
 
 MATRIX = [
@@ -105,6 +108,7 @@ def generate_frames():
     start_time = time.time()
     duration = 4  # seconds
     global cap
+    output_video_filename = None
     cap = cv2.VideoCapture(0)
     cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
     cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
@@ -155,10 +159,12 @@ def generate_frames():
                 detected_person = False
             if detected_person and detected_person != prev_has_person:
                 client.publish(topic, "person_detected", qos=0, retain=False)
+                output_video_filename = "output_video_" + datetime.now().strftime("%Y%m%d-%H%M%S") + ".avi"
                 prev_has_person = detected_person
             elif detected_person == False and detected_person != prev_has_person:
                 client.publish(topic, "nobody_detected", qos=0, retain=False)
                 prev_has_person = detected_person
+                output_video_filename = None
             has_person_array.clear()
 
         fps_text = 'FPS = {:.1f}'.format(fps)
@@ -166,6 +172,7 @@ def generate_frames():
         cv2.putText(image, fps_text, text_location, cv2.FONT_HERSHEY_PLAIN,
             font_size, text_color, font_thickness)
 
+        save_video(image, output_video_filename, fps)
         if cv2.waitKey(1) == 27 or stop_video:
             break
         #cv2.imshow('object_detector', image)
@@ -173,6 +180,29 @@ def generate_frames():
         frame = buffer.tobytes()
         yield (b'--frame\r\n'
             b'Content-Type: image/jpeg\r\n\r\n' + frame + b'\r\n\r\n')
+
+def save_video(frame, output_video_filename, fps):
+    global output_video_writer
+    if output_video_filename is not None:
+        if output_video_writer is None:
+            logging.info(f"Start saving the video.")
+            fourcc = cv2.VideoWriter_fourcc(*'XVID')
+            output_video_writer = cv2.VideoWriter(output_video_filename, fourcc, 10, (640, 480))
+
+        if output_video_writer.isOpened():
+            success = output_video_writer.write(frame)
+            if not success:
+                logging.info(f"Error writing frame to video.")
+        else:
+            logging.info(f"Video writer is not opened.")
+    else:
+        logging.info(f"Invalid output video filename.")
+
+def cleanup():
+    global output_video_writer
+    if output_video_writer is not None:
+        output_video_writer.release()
+        logging.info(f"camera released.")
 
 def generate_placeholder():
     placeholder_size = (640, 480)  # Adjust the size as needed
@@ -262,4 +292,5 @@ if __name__ == '__main__':
     setup_matrix()
     keypad_thread = threading.Thread(target=check_password_sequence)
     keypad_thread.start()
-    #app.run(debug=True)
+    atexit.register(cleanup)
+    app.run(debug=True)
