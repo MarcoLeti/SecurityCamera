@@ -12,12 +12,6 @@ import logging
 import threading
 import RPi.GPIO as GPIO
 
-_MARGIN = 10  # pixels
-_ROW_SIZE = 10  # pixels
-_FONT_SIZE = 1
-_FONT_THICKNESS = 1
-_TEXT_COLOR = (0, 0, 255)  # red
-
 show_video = False
 stop_video = False
 prev_show_video = False
@@ -26,54 +20,22 @@ cap = None
 topic = "detection"
 logging.basicConfig(level=logging.DEBUG, format='%(asctime)s - %(levelname)s - %(message)s')
 
+# Define arrays for membrane matrix mapping
+# Reference: https://www.youtube.com/watch?v=yYnX5QodqQ4
 MATRIX = [
     [1, 2, 3, "A"],
     [4, 5, 6, "B"],
     [7, 8, 9, "C"],
     ["*", 0, "#", "D"]
 ]
-
 ROW_PINS = [17, 18, 27, 22]
 COL_PINS = [23, 25, 24, 8]
 
 GPIO.setmode(GPIO.BCM)
 
-def visualize(
-    image: np.ndarray,
-    detection_result: processor.DetectionResult,
-) -> np.ndarray:
-  """Draws bounding boxes on the input image and return it.
+app = Flask(__name__)
 
-  Args:
-    image: The input RGB image.
-    detection_result: The list of all "Detection" entities to be visualize.
-
-  Returns:
-    Image with bounding boxes.
-  """
-  has_person = False
-  for detection in detection_result.detections:
-    category = detection.categories[0]
-    category_name = category.category_name
-    has_person = category_name == 'person'
-    if has_person:
-        # Draw bounding_box
-        bbox = detection.bounding_box
-        start_point = bbox.origin_x, bbox.origin_y
-        end_point = bbox.origin_x + bbox.width, bbox.origin_y + bbox.height
-        cv2.rectangle(image, start_point, end_point, _TEXT_COLOR, 3)
-
-        # Draw label and score
-        
-        probability = round(category.score, 2)
-        result_text = category_name + ' (' + str(probability) + ')'
-        text_location = (_MARGIN + bbox.origin_x,
-                        _MARGIN + _ROW_SIZE + bbox.origin_y)
-        cv2.putText(image, result_text, text_location, cv2.FONT_HERSHEY_PLAIN,
-                    _FONT_SIZE, _TEXT_COLOR, _FONT_THICKNESS)
-        break
-  return image, has_person
-
+# Setup callbacks for MQTT Mosquitto connection
 def on_message(client, userdata, message):
     global show_video
     logging.info(f"Received message on topic {message.topic}: {message.payload.decode()}")
@@ -87,6 +49,7 @@ def on_message(client, userdata, message):
 def on_subscribe(client, userdata, mid, granted_qos):
     logging.info(f"Subscribed to topic with QoS {granted_qos}")
 
+# Setup MQTT Mosquitto client
 client = mqtt.Client()
 client.on_message = on_message
 client.on_subscribe = on_subscribe
@@ -95,16 +58,29 @@ client.connect("raspberrypi.local", 1883, 60)
 client.subscribe("motion")
 client.loop_start()
 
-app = Flask(__name__)
+# Modifies input image adding bounding boxes around the detected person
+def draw_bounding_box(image, detection_info):
+  has_person = False
+  for detection in detection_info.detections:
+    category = detection.categories[0]
+    has_person = category.category_name == 'person'
+    if has_person:
+        bounding_box = detection.bounding_box
+        box_start = bounding_box.origin_x, bounding_box.origin_y
+        box_end = bounding_box.origin_x + bounding_box.width, bounding_box.origin_y + bounding_box.height
+        cv2.rectangle(image, box_start, box_end, (0, 0, 255), 3) # draw red bounding box
+        break
+  return image, has_person
 
+# Capture frames from camera, runs the recognition and send them to the web UI
 def generate_frames():
+    global cap
     has_person_array = []
     detected_person = False
     prev_has_person = False
     counter, fps = 0, 0
     start_time = time.time()
-    duration = 4  # seconds
-    global cap
+
     cap = cv2.VideoCapture(0)
     cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
     cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
@@ -116,43 +92,34 @@ def generate_frames():
     font_thickness = 1
     fps_avg_frame_count = 10
 
-    base_options = core.BaseOptions(
-        file_name='efficientdet_lite0.tflite', use_coral=False, num_threads=4)
-    detection_options = processor.DetectionOptions(
-        max_results=3, score_threshold=0.3)
-    options = vision.ObjectDetectorOptions(
-        base_options=base_options, detection_options=detection_options)
+    # Reference: https://github.com/tensorflow/examples/blob/master/lite/examples/object_detection/raspberry_pi/detect.py
+    base_options = core.BaseOptions(file_name='efficientdet_lite0.tflite', use_coral=False, num_threads=4)
+    detection_options = processor.DetectionOptions(max_results=3, score_threshold=0.3)
+    options = vision.ObjectDetectorOptions(base_options, detection_options)
     detector = vision.ObjectDetector.create_from_options(options)
 
     while cap.isOpened():
-        success, image = cap.read()
-        if not success:
-            sys.exit(
-            'ERROR: Unable to read from webcam. Please verify your webcam settings.'
-            )
+        check, image = cap.read()
+        if not check:
+            logging.info(f"Could not read from camera due to some errors.")
+            break
 
-        counter += 1
         image = cv2.flip(image, 1)
-
         rgb_image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
-
         input_tensor = vision.TensorImage.create_from_array(rgb_image)
 
         detection_result = detector.detect(input_tensor)
+        image, has_person = draw_bounding_box(image, detection_result)
 
-        image, has_person = visualize(image, detection_result)
         has_person_array.append(has_person)
 
+        counter += 1
         if counter % fps_avg_frame_count == 0:
             end_time = time.time()
             fps = fps_avg_frame_count / (end_time - start_time)
             start_time = time.time()
-            count_true = sum(has_person_array)
-            count_false = len(has_person_array) - count_true
-            if count_true >= 1:
-                detected_person = True
-            else:
-                detected_person = False
+
+            detected_person = any(has_person_array)
             if detected_person and detected_person != prev_has_person:
                 client.publish(topic, "person_detected", qos=0, retain=False)
                 prev_has_person = detected_person
@@ -163,17 +130,14 @@ def generate_frames():
 
         fps_text = 'FPS = {:.1f}'.format(fps)
         text_location = (left_margin, row_size)
-        cv2.putText(image, fps_text, text_location, cv2.FONT_HERSHEY_PLAIN,
-            font_size, text_color, font_thickness)
+        cv2.putText(image, fps_text, text_location, cv2.FONT_HERSHEY_PLAIN, font_size, text_color, font_thickness)
 
-        if cv2.waitKey(1) == 27 or stop_video:
-            break
-        #cv2.imshow('object_detector', image)
         ret, buffer = cv2.imencode('.jpg', image)
         frame = buffer.tobytes()
         yield (b'--frame\r\n'
             b'Content-Type: image/jpeg\r\n\r\n' + frame + b'\r\n\r\n')
 
+# Generate black frames to show when camera is turned off
 def generate_placeholder():
     placeholder_size = (640, 480)  # Adjust the size as needed
     placeholder_image = np.zeros((placeholder_size[1], placeholder_size[0], 3), dtype=np.uint8)
@@ -182,6 +146,7 @@ def generate_placeholder():
     yield (b'--frame\r\n'
             b'Content-Type: image/jpeg\r\n\r\n' + placeholder_frame + b'\r\n\r\n')
 
+# Setup the membrane matrix
 def setup_matrix():
     for j in range(4):
         GPIO.setup(COL_PINS[j], GPIO.OUT)
@@ -190,6 +155,7 @@ def setup_matrix():
     for i in range(4):
         GPIO.setup(ROW_PINS[i], GPIO.IN, pull_up_down=GPIO.PUD_UP)
 
+# Get pressed membrane matrix key
 def get_key():
     key = None
     for j in range(4):
@@ -202,7 +168,7 @@ def get_key():
         GPIO.output(COL_PINS[j], 1)
     return key
 
-# Function to check for a longer password sequence
+# Check if the predefined password is entered correctly
 def check_password_sequence():
     global stop_video
 
@@ -237,6 +203,7 @@ def check_password_sequence():
             logging.info(f"time out")
             timeoutOn = False
 
+# Define webUI routes
 @app.route('/')
 def index():
     return render_template('index.html')
@@ -262,4 +229,4 @@ if __name__ == '__main__':
     setup_matrix()
     keypad_thread = threading.Thread(target=check_password_sequence)
     keypad_thread.start()
-    #app.run(debug=True)
+    app.run(debug=True)
