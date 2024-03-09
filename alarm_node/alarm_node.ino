@@ -18,9 +18,12 @@ void setup() {
   Serial.begin(9600);
   pinMode(PIRPIN, INPUT);
   pinMode(BUZZER_PIN, OUTPUT);
+
   ledcSetup(0, 5000, 8);  // Configure LEDC channel 0: frequency=5000 Hz, resolution=8-bit
   ledcAttachPin(BUZZER_PIN, 0);  // Attach the LEDC channel to the GPIO pin
+
   connectToWiFi();
+
   client.setServer(MQTT_SERVER, MQTT_PORT);
   client.setCallback(callback);
   while (!client.connected()) {
@@ -45,7 +48,6 @@ void setup() {
 void loop() {
   client.loop();
   int pir_state = digitalRead(PIRPIN);
-  // pir_state == 1 && 
   if(personDetected == true) {
     tone(BUZZER_PIN, 1000);
     Serial.print("playing...");

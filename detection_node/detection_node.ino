@@ -15,23 +15,23 @@ bool prev_motion_detected;
 
 void setup() {
   Serial.begin(9600);
+
   pinMode(PIRPIN, INPUT);
   pinMode(BUTTON_PIN, INPUT);
+
   connectToWiFi();
+
   client.setServer(MQTT_SERVER, MQTT_PORT);
+
   while (!client.connected()) {
     Serial.println("Connecting to MQTT...");
  
     if (client.connect("ESP32Client", MQTT_USER, MQTT_PASSWORD)) {
- 
-      Serial.println("connected");  
- 
+      Serial.println("connected");
     } else {
- 
       Serial.print("failed with state ");
       Serial.print(client.state());
       delay(2000);
- 
     }
   }
 }
@@ -49,6 +49,7 @@ void loop() {
 
   int pir_state = digitalRead(PIRPIN);
   int button_state = digitalRead(BUTTON_PIN);
+  
   bool motion_detected = pir_state == 1 && button_state == 1;
   if(motion_detected == true && motion_detected != prev_motion_detected) {
     Serial.print("sending 1...");
